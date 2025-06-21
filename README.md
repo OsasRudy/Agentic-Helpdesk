@@ -1,5 +1,7 @@
 # Agentic-Helpdesk
 
+The Agentic-Helpdesk is an AI-powered system designed to streamline emergency communication through automated SMS interactions using Twilio and Mistral AI. It processes and responds to messages with advanced AI, providing timely and accurate information during emergencies.
+
 ### Prerequisites
 - install **ngrok**
 
