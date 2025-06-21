@@ -4,6 +4,7 @@ from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 from dotenv import load_dotenv
 import requests
+import logging
 
 # Load from .env file
 load_dotenv()
@@ -16,72 +17,62 @@ client = Client(account_sid, auth_token)
 
 app = Flask(__name__)
 
-# Endpoint to receive SMS 
-@app.route("/get-sms", methods=["POST"])
-def receive_sms():
-    msg = request.form['Body']
-    sender = request.form['From']
-
-    resp = MessagingResponse()
-    # resp.message(f"Message: {msg}")
-    print(f"Received SMS from {sender}: {msg}")
-    return str(resp)
-
-
-# Endpoint to send SMS
-@app.route("/send-sms", methods=["POST"])
-def send_sms():
-    to = request.form['to']
-    body = request.form['body']
-
-    message = client.messages.create(
-        body=body,
-        from_=twilio_phone_number,
-        to=to
-    )
-    return f"Sent message SID: {message.sid}"
+# Incident data
+INCIDENTS = [
+    {"area": "Downtown", "incident": "fire",
+     "instructions": "Evacuate via Main Street. Do not use elevators. Contact Fire Services at 101."},
+    {"area": "Harbour", "incident": "flood",
+     "instructions": "Move to higher ground. Avoid low-lying areas. Contact 102 for rescue services."}
+]
 
 # Endpoint
 @app.route("/sms", methods=["POST"])
 def sms():
+    url = "http://127.0.0.1:7861/api/v1/run/83527a4e-dc12-4171-b91d-b7d04ffb7a48"
+    
     # 1. Receive the message from users
-    msg = request.form['Body']
-    sender = request.form['From']
+    sender = request.form.get("From", "")
+    msg = request.form.get('Body', '').strip()
+    logging.info(f"Received SMS from {sender}: {msg}")
 
-    # 2. Send the message to your Langflow flow and get the reply
-    url = "http://127.0.0.1:7860/api/v1/run/83527a4e-dc12-4171-b91d-b7d04ffb7a48"
+    # 2. Check if any area matches the message
+    for incident in INCIDENTS:
+        if incident["area"].lower() in msg.lower():
+            resp = MessagingResponse()
+            reply = f"We got {incident['incident']} at {incident['area']} from {sender}"
+            resp.message(reply)
+            resp.message("✅ Message received. Working on it...")
+            # 3. Send the message to Langflow
+            payload = {
+                "input_value": msg,
+                "output_type": "text",
+                "input_type": "text"
+            }
+            headers = {
+                "Content-Type": "application/json"
+            }
+            try:
+                # Send API request
+                response = requests.request("POST", url, json=payload, headers=headers)
+                response.raise_for_status()  # Raise exception for bad status codes
+                langflow_msg = response.json()
+                # Extract the AI reply safely
+                ai_reply = (
+                    langflow_msg.get("outputs", [{}])[0]
+                        .get("outputs", [{}])[0]
+                        .get("results", {})
+                        .get("text", {})
+                        .get("data", {})
+                        .get("text", "Sorry, I didn’t get that.")
+                )
+            except Exception as e:
+                print("Langflow error:", e)
+                ai_reply = "Sorry, there was a problem getting the response."
+            resp.message(ai_reply)
+            return str(resp)
 
-    payload = {
-        "input_value": msg,
-        "output_type": "text",
-        "input_type": "text"
-    }
-
-    headers = {
-        "Content-Type": "application/json"
-    }
-
-    try:
-        # Send API request
-        response = requests.request("POST", url, json=payload, headers=headers)
-        response.raise_for_status()  # Raise exception for bad status codes
-        langflow_msg = response.json()
-        # Extract the AI reply safely
-        ai_reply = (
-            langflow_msg.get("outputs", [{}])[0]
-                .get("outputs", [{}])[0]
-                .get("results", {})
-                .get("text", {})
-                .get("data", {})
-                .get("text", "Sorry, I didn’t get that.")
-        )
-    except Exception as e:
-        print("Langflow error:", e)
-        ai_reply = "Sorry, there was a problem getting the response."
-
-    # 3. Send the AI reply back to the user via Twilio
-    resp = MessagingResponse()
-    resp.message(ai_reply)
+    # No area match
+    resp.message("❗ Sorry, we couldn't find incident info for your area.")
     return str(resp)
 
 if __name__ == "__main__":
